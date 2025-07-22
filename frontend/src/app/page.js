@@ -21,7 +21,7 @@ export default function FlowchartPage() {
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, width: 1200, height: 800 });
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
-  const [lastPanPoint, setLastPanPoint] = useState({ x: 0, y: 0 });
+  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
   const [isDraggingFromToolbar, setIsDraggingFromToolbar] = useState(false);
   const [toolbarDragType, setToolbarDragType] = useState(null);
   const svgRef = useRef(null);
@@ -37,6 +37,16 @@ export default function FlowchartPage() {
     circle: { shape: 'ellipse', defaultWidth: 100, defaultHeight: 100 },
     diamond: { shape: 'polygon', defaultWidth: 120, defaultHeight: 80 }
   };
+
+  // Consistent coordinate transformation functions
+  const screenToSvg = useCallback((clientX, clientY) => {
+    if (!svgRef.current) return { x: 0, y: 0 };
+    const rect = svgRef.current.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left) * (viewBox.width / rect.width) + viewBox.x,
+      y: (clientY - rect.top) * (viewBox.height / rect.height) + viewBox.y
+    };
+  }, [viewBox]);
 
   const createNode = (type, x, y) => {
     const nodeType = nodeTypes[type];
@@ -261,12 +271,10 @@ export default function FlowchartPage() {
 
     setSelectedNode(node);
     setIsDragging(true);
-    const rect = svgRef.current.getBoundingClientRect();
-    const svgX = (e.clientX - rect.left) / zoom + viewBox.x;
-    const svgY = (e.clientY - rect.top) / zoom + viewBox.y;
+    const svgPoint = screenToSvg(e.clientX, e.clientY);
     setDragOffset({
-      x: svgX - node.x,
-      y: svgY - node.y
+      x: svgPoint.x - node.x,
+      y: svgPoint.y - node.y
     });
   };
 
@@ -302,7 +310,7 @@ export default function FlowchartPage() {
   };
 
   const findNearestHandle = (x, y, excludeNodeId = null) => {
-    const snapDistance = 20 / zoom;
+    const snapDistance = 20;
     let nearest = null;
     let minDistance = snapDistance;
 
@@ -327,39 +335,35 @@ export default function FlowchartPage() {
   const handleMouseMove = useCallback((e) => {
     if (!svgRef.current) return;
     
-    const rect = svgRef.current.getBoundingClientRect();
-    const svgX = ((e.clientX - rect.left) * viewBox.width / rect.width) + viewBox.x;
-    const svgY = ((e.clientY - rect.top) * viewBox.height / rect.height) + viewBox.y;
-    setCurrentMousePos({ x: svgX, y: svgY });
+    const svgPoint = screenToSvg(e.clientX, e.clientY);
+    setCurrentMousePos(svgPoint);
 
     if (isDraggingFromToolbar && toolbarDragType) {
       setDragPreview({ x: e.clientX, y: e.clientY, type: toolbarDragType });
     } else if (isDragging && selectedNode) {
       updateNode(selectedNode.id, {
-        x: svgX - dragOffset.x,
-        y: svgY - dragOffset.y
+        x: svgPoint.x - dragOffset.x,
+        y: svgPoint.y - dragOffset.y
       });
     } else if (isPanning) {
-      const deltaX = (e.clientX - lastPanPoint.x) / zoom;
-      const deltaY = (e.clientY - lastPanPoint.y) / zoom;
+      const deltaX = (e.clientX - lastMousePos.x) * (viewBox.width / svgRef.current.getBoundingClientRect().width);
+      const deltaY = (e.clientY - lastMousePos.y) * (viewBox.height / svgRef.current.getBoundingClientRect().height);
       setViewBox(prev => ({
         ...prev,
         x: prev.x - deltaX,
         y: prev.y - deltaY
       }));
-      setLastPanPoint({ x: e.clientX, y: e.clientY });
+      setLastMousePos({ x: e.clientX, y: e.clientY });
     }
-  }, [isDragging, selectedNode, dragOffset, isPanning, lastPanPoint, zoom, viewBox, isDraggingFromToolbar, toolbarDragType]);
+  }, [isDragging, selectedNode, dragOffset, isPanning, lastMousePos, viewBox, isDraggingFromToolbar, toolbarDragType, screenToSvg]);
 
   const handleMouseUp = useCallback((e) => {
     if (isDraggingFromToolbar && toolbarDragType && svgRef.current) {
-      const rect = svgRef.current.getBoundingClientRect();
-      const svgX = (e.clientX - rect.left) / zoom + viewBox.x;
-      const svgY = (e.clientY - rect.top) / zoom + viewBox.y;
+      const svgPoint = screenToSvg(e.clientX, e.clientY);
       
       // Only create node if dropped on canvas
       if (e.target === svgRef.current || e.target.closest('svg') === svgRef.current) {
-        createNode(toolbarDragType, svgX, svgY);
+        createNode(toolbarDragType, svgPoint.x, svgPoint.y);
       }
     } else if (isConnecting && connectionStart) {
       // Use current mouse position for connection detection
@@ -378,7 +382,7 @@ export default function FlowchartPage() {
     setIsDraggingFromToolbar(false);
     setToolbarDragType(null);
     setDragPreview(null);
-  }, [isDraggingFromToolbar, toolbarDragType, zoom, viewBox, isConnecting, connectionStart, connectionStartHandle, currentMousePos]);
+  }, [isDraggingFromToolbar, toolbarDragType, isConnecting, connectionStart, connectionStartHandle, currentMousePos, screenToSvg]);
 
   const handleSvgMouseDown = (e) => {
     if (e.target === svgRef.current) {
@@ -394,26 +398,48 @@ export default function FlowchartPage() {
       
       if (e.ctrlKey || e.metaKey) {
         setIsPanning(true);
-        setLastPanPoint({ x: e.clientX, y: e.clientY });
+        setLastMousePos({ x: e.clientX, y: e.clientY });
       }
     }
   };
 
   const handleSvgDoubleClick = (e) => {
     if (e.target === svgRef.current) {
-      const rect = svgRef.current.getBoundingClientRect();
-      const svgX = (e.clientX - rect.left) / zoom + viewBox.x;
-      const svgY = (e.clientY - rect.top) / zoom + viewBox.y;
-      createNode('rectangle', svgX, svgY);
+      const svgPoint = screenToSvg(e.clientX, e.clientY);
+      createNode('rectangle', svgPoint.x, svgPoint.y);
     }
   };
 
   const handleWheel = (e) => {
     e.preventDefault();
     
-    // Simple zoom without trying to zoom toward mouse
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    const newZoom = Math.min(Math.max(zoom * delta, 0.1), 3);
+    const rect = svgRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    // Calculate the SVG point under the mouse before zoom
+    const svgX = mouseX * (viewBox.width / rect.width) + viewBox.x;
+    const svgY = mouseY * (viewBox.height / rect.height) + viewBox.y;
+    
+    // Calculate new zoom
+    const delta = e.deltaY > 0 ? 1.1 : 0.9;
+    const newZoom = Math.min(Math.max(zoom * delta, 0.1), 5);
+    const scale = newZoom / zoom;
+    
+    // Calculate new viewBox dimensions
+    const newWidth = viewBox.width * delta;
+    const newHeight = viewBox.height * delta;
+    
+    // Calculate new viewBox position to keep the point under the mouse stationary
+    const newX = svgX - mouseX * (newWidth / rect.width);
+    const newY = svgY - mouseY * (newHeight / rect.height);
+    
+    setViewBox({
+      x: newX,
+      y: newY,
+      width: newWidth,
+      height: newHeight
+    });
     setZoom(newZoom);
   };
 
@@ -610,13 +636,22 @@ export default function FlowchartPage() {
     const maxX = Math.max(...nodes.map(n => n.x + n.width)) + padding;
     const maxY = Math.max(...nodes.map(n => n.y + n.height)) + padding;
     
+    const rect = svgRef.current.getBoundingClientRect();
+    const contentWidth = maxX - minX;
+    const contentHeight = maxY - minY;
+    
+    // Calculate zoom to fit content
+    const scaleX = rect.width / contentWidth;
+    const scaleY = rect.height / contentHeight;
+    const newZoom = Math.min(scaleX, scaleY, 1); // Don't zoom in more than 100%
+    
     setViewBox({
       x: minX,
       y: minY,
-      width: maxX - minX,
-      height: maxY - minY
+      width: contentWidth,
+      height: contentHeight
     });
-    setZoom(1);
+    setZoom(newZoom);
   };
 
   const resetView = () => {
@@ -903,7 +938,7 @@ export default function FlowchartPage() {
                 <p>• Hover over shapes to see connection handles</p>
                 <p>• Drag from blue handles to connect shapes</p>
                 <p>• Ctrl+drag to pan canvas</p>
-                <p>• Mouse wheel to zoom</p>
+                <p>• Mouse wheel to zoom in/out</p>
                 <p>• Click connection line to delete</p>
                 <p>• Green circle shows valid connection target</p>
               </div>
@@ -1037,10 +1072,10 @@ export default function FlowchartPage() {
             </defs>
             
             <rect
-              x={viewBox.x}
-              y={viewBox.y}
-              width={viewBox.width}
-              height={viewBox.height}
+              x={viewBox.x - 1000}
+              y={viewBox.y - 1000}
+              width={viewBox.width + 2000}
+              height={viewBox.height + 2000}
               fill="url(#grid)"
             />
 
