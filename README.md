@@ -1,12 +1,4 @@
-# Winvite
-Helps groups get together.
+# Flowcharting
 
-ngrok http --url=winvite.ngrok.dev 3000 . 
-
-Styling:
-
-No spaces between if-statments.
-On backend, space after getting data.
-Space after if/else block.
-
+An easy-to-use, intutive, free, open-source flowchart tool that lets you... flowchart.
 
